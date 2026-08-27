@@ -24,9 +24,9 @@ import argparse
 import base64
 import csv
 import dataclasses
-import email.message
 import email.parser
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -34,6 +34,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from typing import NoReturn
 
 MINIMUM_PYTHON = (3, 9)
@@ -95,6 +97,26 @@ COMMON_LICENSES = {"Apache-2.0", "MIT", "BSD-3-Clause", "ISC"}
 
 RECORD_MINIMUM_FIELDS = 2
 
+GITHUB_REPOSITORY_RE = re.compile(r"^https?://github\.com/([^/#?]+)/([^/#?]+)")
+PYPI_METADATA_URL = "https://pypi.org/pypi/{name}/{version}/json"
+GITHUB_API_ROOT = "https://api.github.com"
+GITHUB_RAW_ROOT = "https://raw.githubusercontent.com"
+GITHUB_BLOB_URL = "https://github.com/{repository}/blob/{ref}/{path}"
+HTTP_TIMEOUT_SECONDS = 30
+
+# Home-page is consulted last: it is frequently a documentation site, and this
+# column has to name the repository that actually serves the license file.
+REPOSITORY_URL_LABELS = ("source", "source code", "repository", "code", "github")
+
+LICENSE_PATH_ALTERNATES = (
+    "LICENSE", "LICENSE.txt", "LICENSE.md", "LICENSE.rst",
+    "LICENCE", "COPYING", "COPYING.txt", "NOTICE",
+)
+
+# A calendar version loses a leading zero on PyPI but keeps it in the git tag:
+# certifi publishes 2026.7.22 and tags it 2026.07.22.
+CALENDAR_VERSION_RE = re.compile(r"^\d{4}(\.\d{1,2})+$")
+
 NOTICES_HEADER_TEMPLATE = """# Third-Party Notices
 
 NVIDIA CC Manager for Kubernetes
@@ -105,6 +127,11 @@ text of each distribution's license. It is a snapshot of what the build
 installed when this file was generated: `{requirements}` carries no lock file,
 so a later build may install newer versions, and may pull in distributions
 that are not listed here. Regenerate it whenever the image is released.
+
+Each distribution is listed with the version installed and a link to the
+license file in that version's upstream source. Every link was verified by
+fetching it and comparing its contents with the copy installed in the image, so
+each one resolves to the same license text reproduced below.
 
 Third-party code that reaches the image by another route is named below rather
 than listed above. The image uses `nvcr.io/nvidia/distroless/python` as a base
@@ -123,9 +150,9 @@ class Distribution:
     name: str
     version: str
     declared_license: str
-    source_url: str
     license_texts: dict[str, str]
     license: str
+    license_locations: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
 def fail(message: str) -> NoReturn:
@@ -363,22 +390,6 @@ def resolve_license_file(
     return resolved_path if resolved_path.is_file() else None
 
 
-def find_source_url(metadata: email.message.Message) -> str:
-    home_page = (metadata.get("Home-page") or "").strip()
-    if home_page:
-        return home_page
-
-    project_urls = {}
-    for entry in metadata.get_all("Project-URL") or []:
-        label, _, target_url = entry.partition(",")
-        project_urls[label.strip().lower()] = target_url.strip()
-    for label in ("source", "source code", "repository", "homepage",
-                  "documentation"):
-        if label in project_urls:
-            return project_urls[label]
-    return ""
-
-
 def collect_license_texts(
     dist_info: pathlib.Path, declared_filenames: list[str]
 ) -> dict[str, str]:
@@ -428,7 +439,6 @@ def read_dist_info(dist_info: pathlib.Path) -> Distribution:
     declared_license = (
         metadata.get("License-Expression") or metadata.get("License") or ""
     ).strip()
-    source_url = find_source_url(metadata)
     license_texts = collect_license_texts(
         dist_info, metadata.get_all("License-File") or []
     )
@@ -444,10 +454,273 @@ def read_dist_info(dist_info: pathlib.Path) -> Distribution:
         name=dist_name,
         version=version,
         declared_license=declared_license,
-        source_url=source_url or "n/a",
         license_texts=license_texts,
         license=resolve_license(dist_name, declared_license),
     )
+
+
+class GitHubUnavailableError(Exception):
+    """GitHub or PyPI could not be reached, or refused the request.
+
+    Kept distinct from a resolution miss so the run can say which happened: a
+    rate-limited API and a license file that genuinely moved need different
+    fixes from whoever reads the error.
+    """
+
+
+def http_headers() -> dict[str, str]:
+    """Authenticate when a token is available: 60 requests an hour otherwise."""
+    headers = {"User-Agent": "k8s-cc-manager-notices"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def http_bytes(url: str) -> bytes | None:
+    """A 404 is an ordinary miss while probing candidates. A 403, a 429 or a
+    transport error is not, and must not be mistaken for one.
+    """
+    request = urllib.request.Request(url, headers=http_headers())
+    try:
+        with urllib.request.urlopen(
+            request, timeout=HTTP_TIMEOUT_SECONDS
+        ) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code in (403, 429):
+            raise GitHubUnavailableError(
+                f"{url} returned HTTP {error.code} ({error.reason})"
+            ) from error
+        return None
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        raise GitHubUnavailableError(f"{url} could not be fetched: {error}") from error
+
+
+def normalize_github_url(url: str) -> str:
+    match = GITHUB_REPOSITORY_RE.match((url or "").strip())
+    if match is None:
+        return ""
+    owner, repository = match.group(1), match.group(2)
+    if repository.endswith(".git"):
+        repository = repository[: -len(".git")]
+    return f"https://github.com/{owner}/{repository}"
+
+
+def repository_for(dist_name: str, version: str) -> str:
+    body = http_bytes(PYPI_METADATA_URL.format(name=dist_name, version=version))
+    if body is None:
+        return ""
+    release_metadata = json.loads(body).get("info") or {}
+    project_urls = {
+        (label or "").strip().lower(): (target or "").strip()
+        for label, target in (release_metadata.get("project_urls") or {}).items()
+    }
+    for label in REPOSITORY_URL_LABELS:
+        repository = normalize_github_url(project_urls.get(label, ""))
+        if repository:
+            return repository
+    for fallback_url in (
+        project_urls.get("homepage", ""), release_metadata.get("home_page")
+    ):
+        repository = normalize_github_url(fallback_url or "")
+        if repository:
+            return repository
+    return ""
+
+
+def remote_tags(repository: str) -> set[str]:
+    ls_remote_result = subprocess.run(
+        ["git", "ls-remote", "--tags", repository],
+        capture_output=True, text=True, check=False,
+    )
+    if ls_remote_result.returncode != 0:
+        raise GitHubUnavailableError(
+            f"git ls-remote {repository} failed: "
+            f"{ls_remote_result.stderr.strip()}"
+        )
+    tags = set()
+    for line in ls_remote_result.stdout.splitlines():
+        _, _, reference = line.partition("\t")
+        # The ^{} entry is the commit a tag object points at, not a tag name.
+        if reference.startswith("refs/tags/") and not reference.endswith("^{}"):
+            tags.add(reference[len("refs/tags/"):])
+    return tags
+
+
+def tag_for_version(version: str, available_tags: set[str]) -> str:
+    candidate_tags = [version, f"v{version}"]
+    if CALENDAR_VERSION_RE.match(version):
+        zero_padded = ".".join(
+            part if index == 0 else part.zfill(2)
+            for index, part in enumerate(version.split("."))
+        )
+        candidate_tags += [zero_padded, f"v{zero_padded}"]
+    for candidate_tag in candidate_tags:
+        if candidate_tag in available_tags:
+            return candidate_tag
+    return ""
+
+
+def license_path_candidates(filename: str) -> list[str]:
+    candidate_paths = [filename]
+    basename = filename.rsplit("/", 1)[-1]
+    if basename != filename:
+        candidate_paths.append(basename)
+    candidate_paths.extend(LICENSE_PATH_ALTERNATES)
+    ordered_paths, seen_paths = [], set()
+    for candidate_path in candidate_paths:
+        if candidate_path not in seen_paths:
+            seen_paths.add(candidate_path)
+            ordered_paths.append(candidate_path)
+    return ordered_paths
+
+
+def license_digest(text: str) -> str:
+    """Ignore trailing newlines: render() strips them from what it reproduces."""
+    return hashlib.sha256(text.rstrip("\n").encode("utf-8")).hexdigest()
+
+
+def matching_blob_url(
+    repository: str, ref: str, candidate_paths: list[str], wanted_digest: str
+) -> str:
+    """Status alone would not do: a 200 cannot distinguish the right license
+    file from a different one served at a plausible path.
+    """
+    for candidate_path in candidate_paths:
+        body = http_bytes(f"{GITHUB_RAW_ROOT}/{repository}/{ref}/{candidate_path}")
+        if body is None:
+            continue
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if license_digest(text) == wanted_digest:
+            return GITHUB_BLOB_URL.format(
+                repository=repository, ref=ref, path=candidate_path
+            )
+    return ""
+
+
+def submodule_repository(repository: str, ref: str, directory: str) -> str:
+    body = http_bytes(f"{GITHUB_RAW_ROOT}/{repository}/{ref}/.gitmodules")
+    if body is None:
+        return ""
+    declared_path = ""
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        key, value = key.strip(), value.strip()
+        if key == "path":
+            declared_path = value
+        elif key == "url" and declared_path == directory:
+            return normalize_github_url(value)
+    return ""
+
+
+def submodule_commit(repository: str, ref: str, directory: str) -> str:
+    parent_directory = directory.rpartition("/")[0]
+    body = http_bytes(
+        f"{GITHUB_API_ROOT}/repos/{repository}/contents/{parent_directory}"
+        f"?ref={ref}"
+    )
+    if body is None:
+        return ""
+    wanted_name = directory.rsplit("/", 1)[-1]
+    for entry in json.loads(body):
+        if entry.get("name") == wanted_name:
+            return entry.get("sha") or ""
+    return ""
+
+
+def verified_license_url(
+    distribution: Distribution,
+    filename: str,
+    license_text: str,
+    tags_by_repository: dict[str, set[str]],
+) -> str:
+    repository_url = repository_for(distribution.name, distribution.version)
+    if not repository_url:
+        return ""
+    repository = repository_url[len("https://github.com/"):]
+    if repository_url not in tags_by_repository:
+        tags_by_repository[repository_url] = remote_tags(repository_url)
+    tag = tag_for_version(distribution.version, tags_by_repository[repository_url])
+    if not tag:
+        return ""
+
+    wanted_digest = license_digest(license_text)
+    url = matching_blob_url(
+        repository, tag, license_path_candidates(filename), wanted_digest
+    )
+    if url:
+        return url
+
+    # A vendored subdirectory is often a git submodule, whose contents live in
+    # another repository and are absent from this tree at every tag: aiohttp
+    # ships vendor/llhttp/LICENSE, which belongs to nodejs/llhttp.
+    if "/" not in filename:
+        return ""
+    directory, _, basename = filename.rpartition("/")
+    submodule_url = submodule_repository(repository, tag, directory)
+    if not submodule_url:
+        return ""
+    commit = submodule_commit(repository, tag, directory)
+    if not commit:
+        return ""
+    return matching_blob_url(
+        submodule_url[len("https://github.com/"):],
+        commit,
+        license_path_candidates(basename),
+        wanted_digest,
+    )
+
+
+def resolve_license_locations(
+    distributions: list[Distribution],
+) -> list[Distribution]:
+    tags_by_repository: dict[str, set[str]] = {}
+    located_distributions = []
+    for distribution in distributions:
+        license_locations = {
+            filename: verified_license_url(
+                distribution, filename, license_text, tags_by_repository
+            )
+            for filename, license_text in sorted(
+                distribution.license_texts.items()
+            )
+        }
+        located_distributions.append(
+            dataclasses.replace(
+                distribution, license_locations=license_locations
+            )
+        )
+        located_count = sum(1 for url in license_locations.values() if url)
+        print(
+            f"  {distribution.name} {distribution.version}: "
+            f"{located_count}/{len(license_locations)} license files located",
+            file=sys.stderr,
+        )
+    return located_distributions
+
+
+def reject_unlocated_licenses(distributions: list[Distribution]) -> None:
+    unlocated = [
+        f"{distribution.name} {distribution.version}: {filename}"
+        for distribution in distributions
+        for filename, url in sorted(distribution.license_locations.items())
+        if not url
+    ]
+    if unlocated:
+        fail_listing(
+            unlocated,
+            "no upstream URL was found serving the license files above. Every "
+            "link in this document is verified by fetching it and comparing it "
+            "with the copy installed in the image, so a file that matches "
+            "nothing upstream cannot be linked. Check whether the project "
+            "retagged, renamed or moved the file.",
+        )
 
 
 def is_known_spdx(expression: str) -> bool:
@@ -505,6 +778,13 @@ def collect_distributions(site_packages: pathlib.Path) -> list[Distribution]:
     return distributions
 
 
+def location_cell(distribution: Distribution) -> str:
+    return " / ".join(
+        f"[{filename}]({distribution.license_locations[filename]})"
+        for filename in sorted(distribution.license_texts)
+    ) or "n/a"
+
+
 def render(distributions: list[Distribution]) -> str:
     lines: list[str] = []
     emit = lines.append
@@ -531,12 +811,12 @@ def render(distributions: list[Distribution]) -> str:
 
     emit("## Python Dependency Index")
     emit("")
-    emit("| Distribution | Version | License | Source |")
-    emit("|--------------|---------|---------|--------|")
+    emit("| Distribution | Version | License | Location |")
+    emit("|--------------|---------|---------|----------|")
     for distribution in distributions:
         emit(
             f"| `{distribution.name}` | {distribution.version} "
-            f"| {distribution.license} | {distribution.source_url} |"
+            f"| {distribution.license} | {location_cell(distribution)} |"
         )
     emit("")
 
@@ -555,7 +835,6 @@ def render(distributions: list[Distribution]) -> str:
                 "* Declared in package metadata: "
                 f"`{distribution.declared_license}`"
             )
-        emit(f"* Source: {distribution.source_url}")
         if not distribution.license_texts:
             emit("")
             emit(NO_LICENSE_TEXT)
@@ -564,6 +843,8 @@ def render(distributions: list[Distribution]) -> str:
             fence = code_fence_for(license_body)
             emit("")
             emit(f"#### {filename}")
+            emit("")
+            emit(f"<{distribution.license_locations[filename]}>")
             emit("")
             emit(f"{fence}text")
             emit(license_body)
@@ -639,6 +920,19 @@ def main() -> int:
         shutil.rmtree(work_dir, ignore_errors=True)
 
     reject_incomplete(distributions)
+
+    print("Resolving upstream license locations...", file=sys.stderr)
+    try:
+        distributions = resolve_license_locations(distributions)
+    except GitHubUnavailableError as error:
+        fail(
+            f"could not reach GitHub or PyPI while resolving license "
+            f"locations: {error}\nThis is a connectivity or rate-limit "
+            "problem, not a missing license. Set GITHUB_TOKEN or GH_TOKEN to "
+            "raise the API rate limit, or re-run when the service is "
+            "reachable."
+        )
+    reject_unlocated_licenses(distributions)
 
     write_atomically(NOTICES_FILE, render(distributions))
 

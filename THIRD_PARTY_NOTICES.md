@@ -9,6 +9,11 @@ installed when this file was generated: `requirements.txt` carries no lock file,
 so a later build may install newer versions, and may pull in distributions
 that are not listed here. Regenerate it whenever the image is released.
 
+Each distribution is listed with the version installed and a link to the
+license file in that version's upstream source. Every link was verified by
+fetching it and comparing its contents with the copy installed in the image, so
+each one resolves to the same license text reproduced below.
+
 Third-party code that reaches the image by another route is named below rather
 than listed above. The image uses `nvcr.io/nvidia/distroless/python` as a base
 image, which provides the Python interpreter and its standard library. All of
@@ -34,29 +39,29 @@ third-party dependency and is not listed here.
 
 ## Python Dependency Index
 
-| Distribution | Version | License | Source |
-|--------------|---------|---------|--------|
-| `aiohappyeyeballs` | 2.7.1 | PSF-2.0 | https://github.com/aio-libs/aiohappyeyeballs |
-| `aiohttp` | 3.14.3 | Apache-2.0 AND MIT | https://github.com/aio-libs/aiohttp |
-| `aiosignal` | 1.4.0 | Apache-2.0 | https://github.com/aio-libs/aiosignal |
-| `attrs` | 26.1.0 | MIT | https://www.attrs.org/ |
-| `certifi` | 2026.7.22 | MPL-2.0 | https://github.com/certifi/python-certifi |
-| `charset-normalizer` | 3.5.1 | MIT | https://charset-normalizer.readthedocs.io/ |
-| `durationpy` | 0.10 | MIT | https://github.com/icholy/durationpy |
-| `frozenlist` | 1.8.0 | Apache-2.0 | https://github.com/aio-libs/frozenlist |
-| `idna` | 3.19 | BSD-3-Clause | https://github.com/kjd/idna |
-| `kubernetes` | 36.0.3 | Apache-2.0 | https://github.com/kubernetes-client/python |
-| `multidict` | 6.7.1 | Apache-2.0 | https://github.com/aio-libs/multidict |
-| `oauthlib` | 3.3.1 | BSD-3-Clause | https://github.com/oauthlib/oauthlib |
-| `propcache` | 0.5.2 | Apache-2.0 | https://github.com/aio-libs/propcache |
-| `python-dateutil` | 2.9.0.post0 | Apache-2.0 AND BSD-3-Clause | https://github.com/dateutil/dateutil |
-| `pyyaml` | 6.0.3 | MIT | https://pyyaml.org/ |
-| `requests` | 2.34.2 | Apache-2.0 | https://github.com/psf/requests |
-| `requests-oauthlib` | 2.0.0 | ISC | https://github.com/requests/requests-oauthlib |
-| `six` | 1.17.0 | MIT | https://github.com/benjaminp/six |
-| `urllib3` | 2.7.0 | MIT | https://urllib3.readthedocs.io |
-| `websocket-client` | 1.9.0 | Apache-2.0 | https://github.com/websocket-client/websocket-client.git |
-| `yarl` | 1.24.5 | Apache-2.0 | https://github.com/aio-libs/yarl |
+| Distribution | Version | License | Location |
+|--------------|---------|---------|----------|
+| `aiohappyeyeballs` | 2.7.1 | PSF-2.0 | [LICENSE](https://github.com/aio-libs/aiohappyeyeballs/blob/v2.7.1/LICENSE) |
+| `aiohttp` | 3.14.3 | Apache-2.0 AND MIT | [LICENSE.txt](https://github.com/aio-libs/aiohttp/blob/v3.14.3/LICENSE.txt) / [vendor/llhttp/LICENSE](https://github.com/nodejs/llhttp/blob/01e105a30fd06e248bc8ac73c4adb34a63d4114a/LICENSE) |
+| `aiosignal` | 1.4.0 | Apache-2.0 | [LICENSE](https://github.com/aio-libs/aiosignal/blob/v1.4.0/LICENSE) |
+| `attrs` | 26.1.0 | MIT | [LICENSE](https://github.com/python-attrs/attrs/blob/26.1.0/LICENSE) |
+| `certifi` | 2026.7.22 | MPL-2.0 | [LICENSE](https://github.com/certifi/python-certifi/blob/2026.07.22/LICENSE) |
+| `charset-normalizer` | 3.5.1 | MIT | [LICENSE](https://github.com/jawah/charset_normalizer/blob/3.5.1/LICENSE) |
+| `durationpy` | 0.11 | MIT | [LICENSE](https://github.com/icholy/durationpy/blob/0.11/LICENSE) |
+| `frozenlist` | 1.8.0 | Apache-2.0 | [LICENSE](https://github.com/aio-libs/frozenlist/blob/v1.8.0/LICENSE) |
+| `idna` | 3.19 | BSD-3-Clause | [LICENSE.md](https://github.com/kjd/idna/blob/v3.19/LICENSE.md) |
+| `kubernetes` | 36.0.3 | Apache-2.0 | [LICENSE](https://github.com/kubernetes-client/python/blob/v36.0.3/LICENSE) |
+| `multidict` | 6.7.1 | Apache-2.0 | [LICENSE](https://github.com/aio-libs/multidict/blob/v6.7.1/LICENSE) |
+| `oauthlib` | 3.3.1 | BSD-3-Clause | [LICENSE](https://github.com/oauthlib/oauthlib/blob/v3.3.1/LICENSE) |
+| `propcache` | 0.5.2 | Apache-2.0 | [LICENSE](https://github.com/aio-libs/propcache/blob/v0.5.2/LICENSE) / [NOTICE](https://github.com/aio-libs/propcache/blob/v0.5.2/NOTICE) |
+| `python-dateutil` | 2.9.0.post0 | Apache-2.0 AND BSD-3-Clause | [LICENSE](https://github.com/dateutil/dateutil/blob/2.9.0.post0/LICENSE) |
+| `pyyaml` | 6.0.3 | MIT | [LICENSE](https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE) |
+| `requests` | 2.34.2 | Apache-2.0 | [LICENSE](https://github.com/psf/requests/blob/v2.34.2/LICENSE) / [NOTICE](https://github.com/psf/requests/blob/v2.34.2/NOTICE) |
+| `requests-oauthlib` | 2.0.0 | ISC | [LICENSE](https://github.com/requests/requests-oauthlib/blob/v2.0.0/LICENSE) |
+| `six` | 1.17.0 | MIT | [LICENSE](https://github.com/benjaminp/six/blob/1.17.0/LICENSE) |
+| `urllib3` | 2.7.0 | MIT | [LICENSE.txt](https://github.com/urllib3/urllib3/blob/2.7.0/LICENSE.txt) |
+| `websocket-client` | 1.9.0 | Apache-2.0 | [LICENSE](https://github.com/websocket-client/websocket-client/blob/v1.9.0/LICENSE) |
+| `yarl` | 1.24.5 | Apache-2.0 | [LICENSE](https://github.com/aio-libs/yarl/blob/v1.24.5/LICENSE) / [NOTICE](https://github.com/aio-libs/yarl/blob/v1.24.5/NOTICE) |
 
 ## Python Dependency License Texts
 
@@ -64,9 +69,10 @@ third-party dependency and is not listed here.
 
 * Version: 2.7.1
 * License: PSF-2.0
-* Source: https://github.com/aio-libs/aiohappyeyeballs
 
 #### LICENSE
+
+<https://github.com/aio-libs/aiohappyeyeballs/blob/v2.7.1/LICENSE>
 
 ```text
 A. HISTORY OF THE SOFTWARE
@@ -354,9 +360,10 @@ PERFORMANCE OF THIS SOFTWARE.
 
 * Version: 3.14.3
 * License: Apache-2.0 AND MIT
-* Source: https://github.com/aio-libs/aiohttp
 
 #### LICENSE.txt
+
+<https://github.com/aio-libs/aiohttp/blob/v3.14.3/LICENSE.txt>
 
 ```text
 Apache License
@@ -564,6 +571,8 @@ Apache License
 
 #### vendor/llhttp/LICENSE
 
+<https://github.com/nodejs/llhttp/blob/01e105a30fd06e248bc8ac73c4adb34a63d4114a/LICENSE>
+
 ```text
 MIT License
 
@@ -594,9 +603,10 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 * Version: 1.4.0
 * License: Apache-2.0
 * Declared in package metadata: `Apache 2.0`
-* Source: https://github.com/aio-libs/aiosignal
 
 #### LICENSE
+
+<https://github.com/aio-libs/aiosignal/blob/v1.4.0/LICENSE>
 
 ```text
 Apache License
@@ -806,9 +816,10 @@ Apache License
 
 * Version: 26.1.0
 * License: MIT
-* Source: https://www.attrs.org/
 
 #### LICENSE
+
+<https://github.com/python-attrs/attrs/blob/26.1.0/LICENSE>
 
 ```text
 The MIT License (MIT)
@@ -838,9 +849,10 @@ SOFTWARE.
 
 * Version: 2026.7.22
 * License: MPL-2.0
-* Source: https://github.com/certifi/python-certifi
 
 #### LICENSE
+
+<https://github.com/certifi/python-certifi/blob/2026.07.22/LICENSE>
 
 ```text
 This package contains a modified version of ca-bundle.crt:
@@ -869,9 +881,10 @@ one at http://mozilla.org/MPL/2.0/.
 
 * Version: 3.5.1
 * License: MIT
-* Source: https://charset-normalizer.readthedocs.io/
 
 #### LICENSE
+
+<https://github.com/jawah/charset_normalizer/blob/3.5.1/LICENSE>
 
 ```text
 MIT License
@@ -899,11 +912,12 @@ SOFTWARE.
 
 ### durationpy
 
-* Version: 0.10
+* Version: 0.11
 * License: MIT
-* Source: https://github.com/icholy/durationpy
 
 #### LICENSE
+
+<https://github.com/icholy/durationpy/blob/0.11/LICENSE>
 
 ```text
 Copyright 2017 Ilia Choly
@@ -919,9 +933,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 * Version: 1.8.0
 * License: Apache-2.0
-* Source: https://github.com/aio-libs/frozenlist
 
 #### LICENSE
+
+<https://github.com/aio-libs/frozenlist/blob/v1.8.0/LICENSE>
 
 ```text
 Apache License
@@ -1131,9 +1146,10 @@ Apache License
 
 * Version: 3.19
 * License: BSD-3-Clause
-* Source: https://github.com/kjd/idna
 
 #### LICENSE.md
+
+<https://github.com/kjd/idna/blob/v3.19/LICENSE.md>
 
 ```text
 BSD 3-Clause License
@@ -1174,9 +1190,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 * Version: 36.0.3
 * License: Apache-2.0
 * Declared in package metadata: `Apache License Version 2.0`
-* Source: https://github.com/kubernetes-client/python
 
 #### LICENSE
+
+<https://github.com/kubernetes-client/python/blob/v36.0.3/LICENSE>
 
 ```text
 
@@ -1388,9 +1405,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 * Version: 6.7.1
 * License: Apache-2.0
 * Declared in package metadata: `Apache License 2.0`
-* Source: https://github.com/aio-libs/multidict
 
 #### LICENSE
+
+<https://github.com/aio-libs/multidict/blob/v6.7.1/LICENSE>
 
 ```text
    Copyright 2016 Andrew Svetlov and aio-libs contributors
@@ -1412,9 +1430,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 * Version: 3.3.1
 * License: BSD-3-Clause
-* Source: https://github.com/oauthlib/oauthlib
 
 #### LICENSE
+
+<https://github.com/oauthlib/oauthlib/blob/v3.3.1/LICENSE>
 
 ```text
 Copyright (c) The OAuthlib Community
@@ -1450,9 +1469,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 * Version: 0.5.2
 * License: Apache-2.0
-* Source: https://github.com/aio-libs/propcache
 
 #### LICENSE
+
+<https://github.com/aio-libs/propcache/blob/v0.5.2/LICENSE>
 
 ```text
 
@@ -1661,6 +1681,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #### NOTICE
 
+<https://github.com/aio-libs/propcache/blob/v0.5.2/NOTICE>
+
 ```text
    Copyright 2016-2021, Andrew Svetlov and aio-libs team
 
@@ -1682,9 +1704,10 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 * Version: 2.9.0.post0
 * License: Apache-2.0 AND BSD-3-Clause
 * Declared in package metadata: `Dual License`
-* Source: https://github.com/dateutil/dateutil
 
 #### LICENSE
+
+<https://github.com/dateutil/dateutil/blob/2.9.0.post0/LICENSE>
 
 ```text
 Copyright 2017- Paul Ganssle <paul@ganssle.io>
@@ -1747,9 +1770,10 @@ The above BSD License Applies to all code, even that also covered by Apache 2.0.
 
 * Version: 6.0.3
 * License: MIT
-* Source: https://pyyaml.org/
 
 #### LICENSE
+
+<https://github.com/yaml/pyyaml/blob/6.0.3/LICENSE>
 
 ```text
 Copyright (c) 2017-2021 Ingy döt Net
@@ -1778,9 +1802,10 @@ SOFTWARE.
 
 * Version: 2.34.2
 * License: Apache-2.0
-* Source: https://github.com/psf/requests
 
 #### LICENSE
+
+<https://github.com/psf/requests/blob/v2.34.2/LICENSE>
 
 ```text
 
@@ -1962,6 +1987,8 @@ SOFTWARE.
 
 #### NOTICE
 
+<https://github.com/psf/requests/blob/v2.34.2/NOTICE>
+
 ```text
 Requests
 Copyright 2019 Kenneth Reitz
@@ -1971,9 +1998,10 @@ Copyright 2019 Kenneth Reitz
 
 * Version: 2.0.0
 * License: ISC
-* Source: https://github.com/requests/requests-oauthlib
 
 #### LICENSE
+
+<https://github.com/requests/requests-oauthlib/blob/v2.0.0/LICENSE>
 
 ```text
 ISC License
@@ -1997,9 +2025,10 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 * Version: 1.17.0
 * License: MIT
-* Source: https://github.com/benjaminp/six
 
 #### LICENSE
+
+<https://github.com/benjaminp/six/blob/1.17.0/LICENSE>
 
 ```text
 Copyright (c) 2010-2024 Benjamin Peterson
@@ -2026,9 +2055,10 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 * Version: 2.7.0
 * License: MIT
-* Source: https://urllib3.readthedocs.io
 
 #### LICENSE.txt
+
+<https://github.com/urllib3/urllib3/blob/2.7.0/LICENSE.txt>
 
 ```text
 MIT License
@@ -2058,9 +2088,10 @@ SOFTWARE.
 
 * Version: 1.9.0
 * License: Apache-2.0
-* Source: https://github.com/websocket-client/websocket-client.git
 
 #### LICENSE
+
+<https://github.com/websocket-client/websocket-client/blob/v1.9.0/LICENSE>
 
 ```text
 
@@ -2271,9 +2302,10 @@ SOFTWARE.
 
 * Version: 1.24.5
 * License: Apache-2.0
-* Source: https://github.com/aio-libs/yarl
 
 #### LICENSE
+
+<https://github.com/aio-libs/yarl/blob/v1.24.5/LICENSE>
 
 ```text
 
@@ -2481,6 +2513,8 @@ SOFTWARE.
 ```
 
 #### NOTICE
+
+<https://github.com/aio-libs/yarl/blob/v1.24.5/NOTICE>
 
 ```text
    Copyright 2016-2021, Andrew Svetlov and aio-libs team
