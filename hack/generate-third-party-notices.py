@@ -24,9 +24,9 @@ import argparse
 import base64
 import csv
 import dataclasses
-import email.message
 import email.parser
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -34,6 +34,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import NoReturn
 
 MINIMUM_PYTHON = (3, 9)
@@ -95,24 +99,69 @@ COMMON_LICENSES = {"Apache-2.0", "MIT", "BSD-3-Clause", "ISC"}
 
 RECORD_MINIMUM_FIELDS = 2
 
+GITHUB_REPOSITORY_RE = re.compile(r"^https?://github\.com/([^/#?]+)/([^/#?]+)")
+PYPI_METADATA_URL = "https://pypi.org/pypi/{name}/{version}/json"
+GITHUB_API_ROOT = "https://api.github.com"
+GITHUB_RAW_ROOT = "https://raw.githubusercontent.com"
+GITHUB_BLOB_URL = "https://github.com/{repository}/blob/{ref}/{path}"
+HTTP_TIMEOUT_SECONDS = 30
+
+# Home-page is consulted last: it is frequently a documentation site, and this
+# column has to name the repository that actually serves the license file.
+REPOSITORY_URL_LABELS = ("source", "source code", "repository", "code", "github")
+
+LICENSE_PATH_ALTERNATES = (
+    "LICENSE", "LICENSE.txt", "LICENSE.md", "LICENSE.rst",
+    "LICENCE", "COPYING", "COPYING.txt", "NOTICE",
+)
+
+# A calendar version loses a leading zero on PyPI but keeps it in the git tag:
+# certifi publishes 2026.7.22 and tags it 2026.07.22.
+CALENDAR_VERSION_RE = re.compile(r"^\d{4}(\.\d{1,2})+$")
+
+# The Dockerfile builds rm in an Alpine stage and copies it into the image, so
+# musl is statically linked into a binary this repository ships. Nothing in the
+# image carries musl's own licence file, so unlike every Location above, the
+# text cannot be matched against a copy we ship: the version is read out of the
+# binary and the text is taken from upstream at that version's tag.
+MUSL_NAME = "musl"
+MUSL_LICENSE = "MIT"
+MUSL_LICENSE_FILENAME = "COPYRIGHT"
+MUSL_STAGE = "stg2"
+MUSL_STAGE_TAG = "k8s-cc-manager-notices-musl"
+MUSL_STAGE_BINARY = "/build/rm"
+MUSL_IMAGE_BINARY = "/bin/rm"
+MUSL_VERSION_RE = re.compile(rb"musl-(\d+(?:\.\d+)+)")
+MUSL_COPYRIGHT_URL = (
+    "https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v{version}"
+)
+
+GITHUB_AUTH_HOSTS = {"github.com", "api.github.com", "raw.githubusercontent.com"}
+
 NOTICES_HEADER_TEMPLATE = """# Third-Party Notices
 
 NVIDIA CC Manager for Kubernetes
 
 This file lists the third-party **Python distributions** installed into the
-released `{image}` container image, along with the verbatim
-text of each distribution's license. It is a snapshot of what the build
+released `{image}` container image{c_library_scope}, along with the
+verbatim text of each license. It is a snapshot of what the build
 installed when this file was generated: `{requirements}` carries no lock file,
 so a later build may install newer versions, and may pull in distributions
 that are not listed here. Regenerate it whenever the image is released.
 
+Each distribution is listed with the version installed and a link to the
+license file in that version's upstream source. Every distribution's link was
+verified by fetching it and comparing its contents with the copy installed in
+the image, so each one resolves to the same license text reproduced below.
+{musl_provenance}
 Third-party code that reaches the image by another route is named below rather
 than listed above. The image uses `nvcr.io/nvidia/distroless/python` as a base
 image, which provides the Python interpreter and its standard library. All of
 the OSS packages and source included in that image can be found at
 <https://developer.nvidia.com/w/distroless-oss/index.html>. A statically
 compiled `/bin/rm` is added to the image; its source is NVIDIA's own, but it is
-linked against musl libc. NVIDIA's own code, including the bundled copy of
+statically linked against musl libc{musl_terms}. NVIDIA's own code, including
+the bundled copy of
 [NVIDIA/gpu-admin-tools](https://github.com/NVIDIA/gpu-admin-tools), is not a
 third-party dependency and is not listed here.
 """
@@ -123,9 +172,21 @@ class Distribution:
     name: str
     version: str
     declared_license: str
-    source_url: str
     license_texts: dict[str, str]
     license: str
+    license_locations: dict[str, str] = dataclasses.field(default_factory=dict)
+
+
+@dataclasses.dataclass(frozen=True)
+class BundledLibrary:
+    """A non-Python library compiled into a binary the image ships."""
+
+    name: str
+    version: str
+    license: str
+    license_filename: str
+    license_url: str
+    license_text: str
 
 
 def fail(message: str) -> NoReturn:
@@ -164,6 +225,27 @@ def code_fence_for(text: str) -> str:
         default=0,
     )
     return "`" * max(3, longest_backtick_run + 1)
+
+
+def wrap_paragraphs(text: str, width: int = 79) -> str:
+    """Rewrap prose so the header reads the same however placeholders fill.
+
+    The template's own line breaks cannot survive substitution: a clause that
+    appears only when a bundled library is present would otherwise leave a
+    short line above it and an overlong one below.
+    """
+    wrapped = []
+    for paragraph in text.split("\n\n"):
+        collapsed = " ".join(paragraph.split())
+        if not collapsed:
+            continue
+        wrapped.append("\n".join(textwrap.wrap(
+            collapsed,
+            width=width,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )))
+    return "\n\n".join(wrapped)
 
 
 def write_atomically(path: pathlib.Path, text: str) -> None:
@@ -248,6 +330,132 @@ def build_and_extract_deps(work_dir: pathlib.Path) -> pathlib.Path:
 def extract_deps_from_image(image: str, work_dir: pathlib.Path) -> pathlib.Path:
     print(f"Reading {image} for {BUILD_PLATFORM}...", file=sys.stderr)
     return copy_deps_from_image(image, IMAGE_DEPS_PATH, work_dir)
+
+
+def copy_file_from_image(
+    image: str, source_path: str, destination: pathlib.Path
+) -> pathlib.Path | None:
+    """Copy one file out of an image, or None when it is not there.
+
+    Not routed through docker(), which exits on failure: a missing path is a
+    result to report, not an error to die on.
+    """
+    container_id = docker(
+        ["create", "--platform", BUILD_PLATFORM, image], capture=True
+    ).strip()
+    if not container_id:
+        fail("docker create returned no container id")
+    try:
+        copied = subprocess.run(
+            ["docker", "cp", f"{container_id}:{source_path}", str(destination)],
+            capture_output=True, text=True, check=False,
+        )
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", container_id],
+            capture_output=True, check=False,
+        )
+    return destination if copied.returncode == 0 and destination.exists() else None
+
+
+def build_musl_stage(work_dir: pathlib.Path) -> pathlib.Path | None:
+    """The verify target regenerates from the released image and diffs the
+    result, so this path and that one have to see the same binary. The default
+    run builds only the Python builder stage, which has no rm.
+    """
+    print(
+        f"Building {repo_relative(DOCKERFILE)} target '{MUSL_STAGE}' for "
+        f"{BUILD_PLATFORM}...",
+        file=sys.stderr,
+    )
+    docker([
+        "build",
+        "--pull",
+        "--platform", BUILD_PLATFORM,
+        "--target", MUSL_STAGE,
+        "--file", str(DOCKERFILE),
+        "--tag", MUSL_STAGE_TAG,
+        str(REPO_ROOT),
+    ], stream=True)
+    return copy_file_from_image(
+        MUSL_STAGE_TAG, MUSL_STAGE_BINARY, work_dir / "rm"
+    )
+
+
+def musl_version_in(binary: pathlib.Path) -> str:
+    """Alpine leaves its build path in the binary, which is the only record of
+    the musl version: nothing else in the image names it.
+    """
+    musl_versions_found = {
+        match.group(1).decode()
+        for match in MUSL_VERSION_RE.finditer(binary.read_bytes())
+    }
+    if not musl_versions_found:
+        fail(
+            f"{MUSL_IMAGE_BINARY} carries no musl version marker. It is built "
+            f"from the Dockerfile's '{MUSL_STAGE}' Alpine stage and should. "
+            "Either it is no longer linked against musl, in which case update "
+            "this tool, or the marker moved and musl would silently go "
+            "unattributed."
+        )
+    if len(musl_versions_found) > 1:
+        fail(
+            f"{MUSL_IMAGE_BINARY} names more than one musl version "
+            f"({', '.join(sorted(musl_versions_found))}); cannot say which is "
+            "linked in."
+        )
+    return musl_versions_found.pop()
+
+
+def musl_license_text(version: str) -> tuple[str, str]:
+    """There is no musl file in the image to compare against, so a tag that
+    exists and serves a licence is the only check available here.
+    """
+    url = MUSL_COPYRIGHT_URL.format(version=version)
+    body = http_bytes(url)
+    if body is None:
+        fail(
+            f"musl {version}: {url} returned 404. The version read from "
+            f"{MUSL_IMAGE_BINARY} has no matching upstream tag, so its licence "
+            "cannot be reproduced."
+        )
+    text = body.decode("utf-8")
+    if not text.strip():
+        fail(f"musl {version}: {url} served an empty file.")
+    return url, text
+
+
+def collect_bundled_libraries(
+    image: str | None, work_dir: pathlib.Path
+) -> list[BundledLibrary]:
+    binary = (
+        copy_file_from_image(image, MUSL_IMAGE_BINARY, work_dir / "rm")
+        if image
+        else build_musl_stage(work_dir)
+    )
+    if binary is None:
+        # A legitimate state if the binary stops being shipped, but never a
+        # silent one: it would drop a dependency from the document.
+        print(
+            f"No {MUSL_IMAGE_BINARY} in the image; skipping the bundled C "
+            "library sections.",
+            file=sys.stderr,
+        )
+        return []
+
+    version = musl_version_in(binary)
+    print(f"Found musl {version} linked into {MUSL_IMAGE_BINARY}", file=sys.stderr)
+    url, text = musl_license_text(version)
+    return [
+        BundledLibrary(
+            name=MUSL_NAME,
+            version=version,
+            license=MUSL_LICENSE,
+            license_filename=MUSL_LICENSE_FILENAME,
+            license_url=url,
+            license_text=text,
+        )
+    ]
 
 
 def find_site_packages(lib_dir: pathlib.Path) -> pathlib.Path:
@@ -363,22 +571,6 @@ def resolve_license_file(
     return resolved_path if resolved_path.is_file() else None
 
 
-def find_source_url(metadata: email.message.Message) -> str:
-    home_page = (metadata.get("Home-page") or "").strip()
-    if home_page:
-        return home_page
-
-    project_urls = {}
-    for entry in metadata.get_all("Project-URL") or []:
-        label, _, target_url = entry.partition(",")
-        project_urls[label.strip().lower()] = target_url.strip()
-    for label in ("source", "source code", "repository", "homepage",
-                  "documentation"):
-        if label in project_urls:
-            return project_urls[label]
-    return ""
-
-
 def collect_license_texts(
     dist_info: pathlib.Path, declared_filenames: list[str]
 ) -> dict[str, str]:
@@ -428,7 +620,6 @@ def read_dist_info(dist_info: pathlib.Path) -> Distribution:
     declared_license = (
         metadata.get("License-Expression") or metadata.get("License") or ""
     ).strip()
-    source_url = find_source_url(metadata)
     license_texts = collect_license_texts(
         dist_info, metadata.get_all("License-File") or []
     )
@@ -444,10 +635,278 @@ def read_dist_info(dist_info: pathlib.Path) -> Distribution:
         name=dist_name,
         version=version,
         declared_license=declared_license,
-        source_url=source_url or "n/a",
         license_texts=license_texts,
         license=resolve_license(dist_name, declared_license),
     )
+
+
+class GitHubUnavailableError(Exception):
+    """GitHub or PyPI could not be reached, or refused the request.
+
+    Kept distinct from a resolution miss so the run can say which happened: a
+    rate-limited API and a license file that genuinely moved need different
+    fixes from whoever reads the error.
+    """
+
+
+def http_headers(url: str) -> dict[str, str]:
+    """Unauthenticated GitHub allows 60 requests an hour. Scoped to GitHub's
+    own hosts: this fetcher is also pointed at musl's cgit, and a bearer token
+    must not be sent to a host that did not issue it.
+    """
+    headers = {"User-Agent": "k8s-cc-manager-notices"}
+    if urllib.parse.urlsplit(url).hostname not in GITHUB_AUTH_HOSTS:
+        return headers
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def http_bytes(url: str) -> bytes | None:
+    """A 404 is an ordinary miss while probing candidates. A 403, a 429 or a
+    transport error is not, and must not be mistaken for one.
+    """
+    request = urllib.request.Request(url, headers=http_headers(url))
+    try:
+        with urllib.request.urlopen(
+            request, timeout=HTTP_TIMEOUT_SECONDS
+        ) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code in (403, 429):
+            raise GitHubUnavailableError(
+                f"{url} returned HTTP {error.code} ({error.reason})"
+            ) from error
+        return None
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        raise GitHubUnavailableError(f"{url} could not be fetched: {error}") from error
+
+
+def normalize_github_url(url: str) -> str:
+    match = GITHUB_REPOSITORY_RE.match((url or "").strip())
+    if match is None:
+        return ""
+    owner, repository = match.group(1), match.group(2)
+    if repository.endswith(".git"):
+        repository = repository[: -len(".git")]
+    return f"https://github.com/{owner}/{repository}"
+
+
+def repository_for(dist_name: str, version: str) -> str:
+    body = http_bytes(PYPI_METADATA_URL.format(name=dist_name, version=version))
+    if body is None:
+        return ""
+    release_metadata = json.loads(body).get("info") or {}
+    project_urls = {
+        (label or "").strip().lower(): (target or "").strip()
+        for label, target in (release_metadata.get("project_urls") or {}).items()
+    }
+    for label in REPOSITORY_URL_LABELS:
+        repository = normalize_github_url(project_urls.get(label, ""))
+        if repository:
+            return repository
+    for fallback_url in (
+        project_urls.get("homepage", ""), release_metadata.get("home_page")
+    ):
+        repository = normalize_github_url(fallback_url or "")
+        if repository:
+            return repository
+    return ""
+
+
+def remote_tags(repository: str) -> set[str]:
+    ls_remote_result = subprocess.run(
+        ["git", "ls-remote", "--tags", repository],
+        capture_output=True, text=True, check=False,
+    )
+    if ls_remote_result.returncode != 0:
+        raise GitHubUnavailableError(
+            f"git ls-remote {repository} failed: "
+            f"{ls_remote_result.stderr.strip()}"
+        )
+    tags = set()
+    for line in ls_remote_result.stdout.splitlines():
+        _, _, reference = line.partition("\t")
+        # The ^{} entry is the commit a tag object points at, not a tag name.
+        if reference.startswith("refs/tags/") and not reference.endswith("^{}"):
+            tags.add(reference[len("refs/tags/"):])
+    return tags
+
+
+def tag_for_version(version: str, available_tags: set[str]) -> str:
+    candidate_tags = [version, f"v{version}"]
+    if CALENDAR_VERSION_RE.match(version):
+        zero_padded = ".".join(
+            part if index == 0 else part.zfill(2)
+            for index, part in enumerate(version.split("."))
+        )
+        candidate_tags += [zero_padded, f"v{zero_padded}"]
+    for candidate_tag in candidate_tags:
+        if candidate_tag in available_tags:
+            return candidate_tag
+    return ""
+
+
+def license_path_candidates(filename: str) -> list[str]:
+    candidate_paths = [filename]
+    basename = filename.rsplit("/", 1)[-1]
+    if basename != filename:
+        candidate_paths.append(basename)
+    candidate_paths.extend(LICENSE_PATH_ALTERNATES)
+    ordered_paths, seen_paths = [], set()
+    for candidate_path in candidate_paths:
+        if candidate_path not in seen_paths:
+            seen_paths.add(candidate_path)
+            ordered_paths.append(candidate_path)
+    return ordered_paths
+
+
+def license_digest(text: str) -> str:
+    """Ignore trailing newlines: render() strips them from what it reproduces."""
+    return hashlib.sha256(text.rstrip("\n").encode("utf-8")).hexdigest()
+
+
+def matching_blob_url(
+    repository: str, ref: str, candidate_paths: list[str], wanted_digest: str
+) -> str:
+    """Status alone would not do: a 200 cannot distinguish the right license
+    file from a different one served at a plausible path.
+    """
+    for candidate_path in candidate_paths:
+        body = http_bytes(f"{GITHUB_RAW_ROOT}/{repository}/{ref}/{candidate_path}")
+        if body is None:
+            continue
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if license_digest(text) == wanted_digest:
+            return GITHUB_BLOB_URL.format(
+                repository=repository, ref=ref, path=candidate_path
+            )
+    return ""
+
+
+def submodule_repository(repository: str, ref: str, directory: str) -> str:
+    body = http_bytes(f"{GITHUB_RAW_ROOT}/{repository}/{ref}/.gitmodules")
+    if body is None:
+        return ""
+    declared_path = ""
+    for line in body.decode("utf-8", errors="replace").splitlines():
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        key, value = key.strip(), value.strip()
+        if key == "path":
+            declared_path = value
+        elif key == "url" and declared_path == directory:
+            return normalize_github_url(value)
+    return ""
+
+
+def submodule_commit(repository: str, ref: str, directory: str) -> str:
+    parent_directory = directory.rpartition("/")[0]
+    body = http_bytes(
+        f"{GITHUB_API_ROOT}/repos/{repository}/contents/{parent_directory}"
+        f"?ref={ref}"
+    )
+    if body is None:
+        return ""
+    wanted_name = directory.rsplit("/", 1)[-1]
+    for entry in json.loads(body):
+        if entry.get("name") == wanted_name:
+            return entry.get("sha") or ""
+    return ""
+
+
+def verified_license_url(
+    distribution: Distribution,
+    filename: str,
+    license_text: str,
+    tags_by_repository: dict[str, set[str]],
+) -> str:
+    repository_url = repository_for(distribution.name, distribution.version)
+    if not repository_url:
+        return ""
+    repository = repository_url[len("https://github.com/"):]
+    if repository_url not in tags_by_repository:
+        tags_by_repository[repository_url] = remote_tags(repository_url)
+    tag = tag_for_version(distribution.version, tags_by_repository[repository_url])
+    if not tag:
+        return ""
+
+    wanted_digest = license_digest(license_text)
+    url = matching_blob_url(
+        repository, tag, license_path_candidates(filename), wanted_digest
+    )
+    if url:
+        return url
+
+    # A vendored subdirectory is often a git submodule, whose contents live in
+    # another repository and are absent from this tree at every tag: aiohttp
+    # ships vendor/llhttp/LICENSE, which belongs to nodejs/llhttp.
+    if "/" not in filename:
+        return ""
+    directory, _, basename = filename.rpartition("/")
+    submodule_url = submodule_repository(repository, tag, directory)
+    if not submodule_url:
+        return ""
+    commit = submodule_commit(repository, tag, directory)
+    if not commit:
+        return ""
+    return matching_blob_url(
+        submodule_url[len("https://github.com/"):],
+        commit,
+        license_path_candidates(basename),
+        wanted_digest,
+    )
+
+
+def resolve_license_locations(
+    distributions: list[Distribution],
+) -> list[Distribution]:
+    tags_by_repository: dict[str, set[str]] = {}
+    located_distributions = []
+    for distribution in distributions:
+        license_locations = {
+            filename: verified_license_url(
+                distribution, filename, license_text, tags_by_repository
+            )
+            for filename, license_text in sorted(
+                distribution.license_texts.items()
+            )
+        }
+        located_distributions.append(
+            dataclasses.replace(
+                distribution, license_locations=license_locations
+            )
+        )
+        located_count = sum(1 for url in license_locations.values() if url)
+        print(
+            f"  {distribution.name} {distribution.version}: "
+            f"{located_count}/{len(license_locations)} license files located",
+            file=sys.stderr,
+        )
+    return located_distributions
+
+
+def reject_unlocated_licenses(distributions: list[Distribution]) -> None:
+    unlocated = [
+        f"{distribution.name} {distribution.version}: {filename}"
+        for distribution in distributions
+        for filename, url in sorted(distribution.license_locations.items())
+        if not url
+    ]
+    if unlocated:
+        fail_listing(
+            unlocated,
+            "no upstream URL was found serving the license files above. Every "
+            "link in this document is verified by fetching it and comparing it "
+            "with the copy installed in the image, so a file that matches "
+            "nothing upstream cannot be linked. Check whether the project "
+            "retagged, renamed or moved the file.",
+        )
 
 
 def is_known_spdx(expression: str) -> bool:
@@ -505,40 +964,66 @@ def collect_distributions(site_packages: pathlib.Path) -> list[Distribution]:
     return distributions
 
 
-def render(distributions: list[Distribution]) -> str:
+def location_cell(distribution: Distribution) -> str:
+    return " / ".join(
+        f"[{filename}]({distribution.license_locations[filename]})"
+        for filename in sorted(distribution.license_texts)
+    ) or "n/a"
+
+
+def render(
+    distributions: list[Distribution], bundled: list[BundledLibrary]
+) -> str:
     lines: list[str] = []
     emit = lines.append
 
-    emit(NOTICES_HEADER_TEMPLATE.format(
+    emit(wrap_paragraphs(NOTICES_HEADER_TEMPLATE.format(
         image=RELEASED_IMAGE,
         requirements=repo_relative(REQUIREMENTS_FILE),
-    ))
-
-    emit("## License Summary")
-    emit("")
-    emit("| License | Distributions |")
-    emit("|---------|---------------|")
-    for license_name in sorted(
-        {distribution.license for distribution in distributions}
-    ):
-        members = ", ".join(
-            f"`{distribution.name}`"
-            for distribution in distributions
-            if distribution.license == license_name
-        )
-        emit(f"| {license_name} | {members} |")
-    emit("")
+        c_library_scope=(
+            ", and the **C library** statically linked into the `rm` binary "
+            "added to it"
+            if bundled else ""
+        ),
+        musl_terms=", whose terms are reproduced below" if bundled else "",
+        musl_provenance=(
+            "\nmusl is the exception: nothing in the image carries its license "
+            "file, so its version is read out of the binary and its text taken "
+            "from upstream at that version's tag, not compared with a copy "
+            "shipped here.\n"
+            if bundled else ""
+        ),
+    )) + "\n")
 
     emit("## Python Dependency Index")
     emit("")
-    emit("| Distribution | Version | License | Source |")
-    emit("|--------------|---------|---------|--------|")
+    emit("| Distribution | Version | License | Location |")
+    emit("|--------------|---------|---------|----------|")
     for distribution in distributions:
         emit(
             f"| `{distribution.name}` | {distribution.version} "
-            f"| {distribution.license} | {distribution.source_url} |"
+            f"| {distribution.license} | {location_cell(distribution)} |"
         )
     emit("")
+
+    if bundled:
+        emit("## Bundled C Library Index")
+        emit("")
+        emit(
+            "`rm` is built by this repository rather than inherited from the "
+            "base image, and\nis statically linked, so the musl code it "
+            "contains is redistributed in the\nimage. The version is the one "
+            "recorded in the shipped binary itself."
+        )
+        emit("")
+        emit("| Library | Version | License | Location |")
+        emit("|---------|---------|---------|----------|")
+        for library in bundled:
+            emit(
+                f"| `{library.name}` | {library.version} | {library.license} "
+                f"| [{library.license_filename}]({library.license_url}) |"
+            )
+        emit("")
 
     emit("## Python Dependency License Texts")
     for distribution in distributions:
@@ -555,7 +1040,6 @@ def render(distributions: list[Distribution]) -> str:
                 "* Declared in package metadata: "
                 f"`{distribution.declared_license}`"
             )
-        emit(f"* Source: {distribution.source_url}")
         if not distribution.license_texts:
             emit("")
             emit(NO_LICENSE_TEXT)
@@ -564,6 +1048,28 @@ def render(distributions: list[Distribution]) -> str:
             fence = code_fence_for(license_body)
             emit("")
             emit(f"#### {filename}")
+            emit("")
+            emit(f"<{distribution.license_locations[filename]}>")
+            emit("")
+            emit(f"{fence}text")
+            emit(license_body)
+            emit(fence)
+
+    if bundled:
+        emit("")
+        emit("## Bundled C Library License Texts")
+        for library in bundled:
+            license_body = library.license_text.rstrip("\n")
+            fence = code_fence_for(license_body)
+            emit("")
+            emit(f"### {library.name}")
+            emit("")
+            emit(f"* Version: {library.version}")
+            emit(f"* License: {library.license}")
+            emit("")
+            emit(f"#### {library.license_filename}")
+            emit("")
+            emit(f"<{library.license_url}>")
             emit("")
             emit(f"{fence}text")
             emit(license_body)
@@ -635,15 +1141,42 @@ def main() -> int:
             else build_and_extract_deps(work_dir)
         )
         distributions = collect_distributions(find_site_packages(lib_dir))
+        try:
+            bundled = collect_bundled_libraries(args.image, work_dir)
+        except GitHubUnavailableError as error:
+            fail(
+                f"could not reach musl upstream while resolving its license: "
+                f"{error}\nThis is a connectivity problem, not a missing "
+                "license. Re-run when the host is reachable."
+            )
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
     reject_incomplete(distributions)
 
-    write_atomically(NOTICES_FILE, render(distributions))
+    print("Resolving upstream license locations...", file=sys.stderr)
+    try:
+        distributions = resolve_license_locations(distributions)
+    except GitHubUnavailableError as error:
+        fail(
+            f"could not reach GitHub or PyPI while resolving license "
+            f"locations: {error}\nThis is a connectivity or rate-limit "
+            "problem, not a missing license. Set GITHUB_TOKEN or GH_TOKEN to "
+            "raise the API rate limit, or re-run when the service is "
+            "reachable."
+        )
+    reject_unlocated_licenses(distributions)
 
+    write_atomically(NOTICES_FILE, render(distributions, bundled))
+
+    bundled_note = (
+        f" + {len(bundled)} bundled librar"
+        f"{'y' if len(bundled) == 1 else 'ies'}"
+        if bundled else ""
+    )
     print(
-        f"Wrote {repo_relative(NOTICES_FILE)} ({len(distributions)} distributions)",
+        f"Wrote {repo_relative(NOTICES_FILE)} "
+        f"({len(distributions)} distributions{bundled_note})",
         file=sys.stderr,
     )
 
