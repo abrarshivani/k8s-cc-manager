@@ -3,16 +3,21 @@
 NVIDIA CC Manager for Kubernetes
 
 This file lists the third-party **Python distributions** installed into the
-released `nvcr.io/nvidia/k8s-cc-manager` container image, along with the verbatim
-text of each distribution's license. It is a snapshot of what the build
-installed when this file was generated: `requirements.txt` carries no lock file,
-so a later build may install newer versions, and may pull in distributions
-that are not listed here. Regenerate it whenever the image is released.
+released `nvcr.io/nvidia/k8s-cc-manager` container image, and the **C library**
+statically linked into the `rm` binary added to it, along with the verbatim
+text of each license. It is a snapshot of what the build installed when this
+file was generated: `requirements.txt` carries no lock file, so a later build
+may install newer versions, and may pull in distributions that are not listed
+here. Regenerate it whenever the image is released.
 
 Each distribution is listed with the version installed and a link to the
-license file in that version's upstream source. Every link was verified by
-fetching it and comparing its contents with the copy installed in the image, so
-each one resolves to the same license text reproduced below.
+license file in that version's upstream source. Every distribution's link was
+verified by fetching it and comparing its contents with the copy installed in
+the image, so each one resolves to the same license text reproduced below.
+
+musl is the exception: nothing in the image carries its license file, so its
+version is read out of the binary and its text taken from upstream at that
+version's tag, not compared with a copy shipped here.
 
 Third-party code that reaches the image by another route is named below rather
 than listed above. The image uses `nvcr.io/nvidia/distroless/python` as a base
@@ -20,22 +25,10 @@ image, which provides the Python interpreter and its standard library. All of
 the OSS packages and source included in that image can be found at
 <https://developer.nvidia.com/w/distroless-oss/index.html>. A statically
 compiled `/bin/rm` is added to the image; its source is NVIDIA's own, but it is
-linked against musl libc. NVIDIA's own code, including the bundled copy of
+statically linked against musl libc, whose terms are reproduced below. NVIDIA's
+own code, including the bundled copy of
 [NVIDIA/gpu-admin-tools](https://github.com/NVIDIA/gpu-admin-tools), is not a
 third-party dependency and is not listed here.
-
-## License Summary
-
-| License | Distributions |
-|---------|---------------|
-| Apache-2.0 | `aiosignal`, `frozenlist`, `kubernetes`, `multidict`, `propcache`, `requests`, `websocket-client`, `yarl` |
-| Apache-2.0 AND BSD-3-Clause | `python-dateutil` |
-| Apache-2.0 AND MIT | `aiohttp` |
-| BSD-3-Clause | `idna`, `oauthlib` |
-| ISC | `requests-oauthlib` |
-| MIT | `attrs`, `charset-normalizer`, `durationpy`, `pyyaml`, `six`, `urllib3` |
-| MPL-2.0 | `certifi` |
-| PSF-2.0 | `aiohappyeyeballs` |
 
 ## Python Dependency Index
 
@@ -62,6 +55,16 @@ third-party dependency and is not listed here.
 | `urllib3` | 2.7.0 | MIT | [LICENSE.txt](https://github.com/urllib3/urllib3/blob/2.7.0/LICENSE.txt) |
 | `websocket-client` | 1.9.0 | Apache-2.0 | [LICENSE](https://github.com/websocket-client/websocket-client/blob/v1.9.0/LICENSE) |
 | `yarl` | 1.24.5 | Apache-2.0 | [LICENSE](https://github.com/aio-libs/yarl/blob/v1.24.5/LICENSE) / [NOTICE](https://github.com/aio-libs/yarl/blob/v1.24.5/NOTICE) |
+
+## Bundled C Library Index
+
+`rm` is built by this repository rather than inherited from the base image, and
+is statically linked, so the musl code it contains is redistributed in the
+image. The version is the one recorded in the shipped binary itself.
+
+| Library | Version | License | Location |
+|---------|---------|---------|----------|
+| `musl` | 1.2.5 | MIT | [COPYRIGHT](https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5) |
 
 ## Python Dependency License Texts
 
@@ -2530,4 +2533,211 @@ SOFTWARE.
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+```
+
+## Bundled C Library License Texts
+
+### musl
+
+* Version: 1.2.5
+* License: MIT
+
+#### COPYRIGHT
+
+<https://git.musl-libc.org/cgit/musl/plain/COPYRIGHT?h=v1.2.5>
+
+```text
+musl as a whole is licensed under the following standard MIT license:
+
+----------------------------------------------------------------------
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+----------------------------------------------------------------------
+
+Authors/contributors include:
+
+A. Wilcox
+Ada Worcester
+Alex Dowad
+Alex Suykov
+Alexander Monakov
+Andre McCurdy
+Andrew Kelley
+Anthony G. Basile
+Aric Belsito
+Arvid Picciani
+Bartosz Brachaczek
+Benjamin Peterson
+Bobby Bingham
+Boris Brezillon
+Brent Cook
+Chris Spiegel
+Clément Vasseur
+Daniel Micay
+Daniel Sabogal
+Daurnimator
+David Carlier
+David Edelsohn
+Denys Vlasenko
+Dmitry Ivanov
+Dmitry V. Levin
+Drew DeVault
+Emil Renner Berthing
+Fangrui Song
+Felix Fietkau
+Felix Janda
+Gianluca Anzolin
+Hauke Mehrtens
+He X
+Hiltjo Posthuma
+Isaac Dunham
+Jaydeep Patil
+Jens Gustedt
+Jeremy Huntwork
+Jo-Philipp Wich
+Joakim Sindholt
+John Spencer
+Julien Ramseier
+Justin Cormack
+Kaarle Ritvanen
+Khem Raj
+Kylie McClain
+Leah Neukirchen
+Luca Barbato
+Luka Perkov
+M Farkas-Dyck (Strake)
+Mahesh Bodapati
+Markus Wichmann
+Masanori Ogino
+Michael Clark
+Michael Forney
+Mikhail Kremnyov
+Natanael Copa
+Nicholas J. Kain
+orc
+Pascal Cuoq
+Patrick Oppenlander
+Petr Hosek
+Petr Skocik
+Pierre Carrier
+Reini Urban
+Rich Felker
+Richard Pennington
+Ryan Fairfax
+Samuel Holland
+Segev Finer
+Shiz
+sin
+Solar Designer
+Stefan Kristiansson
+Stefan O'Rear
+Szabolcs Nagy
+Timo Teräs
+Trutz Behn
+Valentin Ochs
+Will Dietz
+William Haddon
+William Pitcock
+
+Portions of this software are derived from third-party works licensed
+under terms compatible with the above MIT license:
+
+The TRE regular expression implementation (src/regex/reg* and
+src/regex/tre*) is Copyright © 2001-2008 Ville Laurikari and licensed
+under a 2-clause BSD license (license text in the source files). The
+included version has been heavily modified by Rich Felker in 2012, in
+the interests of size, simplicity, and namespace cleanliness.
+
+Much of the math library code (src/math/* and src/complex/*) is
+Copyright © 1993,2004 Sun Microsystems or
+Copyright © 2003-2011 David Schultz or
+Copyright © 2003-2009 Steven G. Kargl or
+Copyright © 2003-2009 Bruce D. Evans or
+Copyright © 2008 Stephen L. Moshier or
+Copyright © 2017-2018 Arm Limited
+and labelled as such in comments in the individual source files. All
+have been licensed under extremely permissive terms.
+
+The ARM memcpy code (src/string/arm/memcpy.S) is Copyright © 2008
+The Android Open Source Project and is licensed under a two-clause BSD
+license. It was taken from Bionic libc, used on Android.
+
+The AArch64 memcpy and memset code (src/string/aarch64/*) are
+Copyright © 1999-2019, Arm Limited.
+
+The implementation of DES for crypt (src/crypt/crypt_des.c) is
+Copyright © 1994 David Burren. It is licensed under a BSD license.
+
+The implementation of blowfish crypt (src/crypt/crypt_blowfish.c) was
+originally written by Solar Designer and placed into the public
+domain. The code also comes with a fallback permissive license for use
+in jurisdictions that may not recognize the public domain.
+
+The smoothsort implementation (src/stdlib/qsort.c) is Copyright © 2011
+Valentin Ochs and is licensed under an MIT-style license.
+
+The x86_64 port was written by Nicholas J. Kain and is licensed under
+the standard MIT terms.
+
+The mips and microblaze ports were originally written by Richard
+Pennington for use in the ellcc project. The original code was adapted
+by Rich Felker for build system and code conventions during upstream
+integration. It is licensed under the standard MIT terms.
+
+The mips64 port was contributed by Imagination Technologies and is
+licensed under the standard MIT terms.
+
+The powerpc port was also originally written by Richard Pennington,
+and later supplemented and integrated by John Spencer. It is licensed
+under the standard MIT terms.
+
+All other files which have no copyright comments are original works
+produced specifically for use as part of this library, written either
+by Rich Felker, the main author of the library, or by one or more
+contibutors listed above. Details on authorship of individual files
+can be found in the git version control history of the project. The
+omission of copyright and license comments in each file is in the
+interest of source tree size.
+
+In addition, permission is hereby granted for all public header files
+(include/* and arch/*/bits/*) and crt files intended to be linked into
+applications (crt/*, ldso/dlstart.c, and arch/*/crt_arch.h) to omit
+the copyright notice and permission notice otherwise required by the
+license, and to use these files without any requirement of
+attribution. These files include substantial contributions from:
+
+Bobby Bingham
+John Spencer
+Nicholas J. Kain
+Rich Felker
+Richard Pennington
+Stefan Kristiansson
+Szabolcs Nagy
+
+all of whom have explicitly granted such permission.
+
+This file previously contained text expressing a belief that most of
+the files covered by the above exception were sufficiently trivial not
+to be subject to copyright, resulting in confusion over whether it
+negated the permissions granted in the license. In the spirit of
+permissive licensing, and of not having licensing issues being an
+obstacle to adoption, that text has been removed.
 ```
